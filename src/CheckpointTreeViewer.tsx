@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 // Define types for the tree data
 interface TreeItem {
@@ -174,9 +174,9 @@ const TreeViewContent = ({ data, isLoading, expandAll, setExpandAll }: TreeViewC
 };
 
 // Custom tab content component
-const CustomTabContent = () => {
+const CustomTabContent = ({ initialUrl = '', setCustomUrlParam }: { initialUrl?: string, setCustomUrlParam: (url: string) => void }) => {
   const [inputValue, setInputValue] = useState('');
-  const [urlValue, setUrlValue] = useState('');
+  const [urlValue, setUrlValue] = useState(initialUrl);
   const [parsedData, setParsedData] = useState<TreeItem[]>([]);
   const [expandAll, setExpandAll] = useState(false);
   const [showError, setShowError] = useState(false);
@@ -184,7 +184,7 @@ const CustomTabContent = () => {
   const [loading, setLoading] = useState(false);
 
   // Pre-process the data to ensure it has the right structure
-  const processNode = (node: any): TreeItem => {
+  const processNode = useCallback((node: any): TreeItem => {
     // Convert numbers to duration strings for display
     if (typeof node.duration === 'number') {
       node.duration = `${node.duration.toFixed(2)}ms`;
@@ -201,9 +201,53 @@ const CustomTabContent = () => {
     }
     
     return node;
-  };
+  }, []);
 
-  const handleDisplay = () => {
+  // Define handleFetchFromUrl with useCallback to avoid dependencies issues
+  const handleFetchFromUrl = useCallback(async (url: string = urlValue) => {
+    if (!url) return;
+    
+    setLoading(true);
+    setShowError(false);
+    
+    try {
+      // Fetch data from the URL
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch data: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      // Process the data the same way as pasted data
+      const processedData = Array.isArray(data) 
+        ? data.map(processNode) 
+        : [processNode(data)];
+      
+      setParsedData(processedData);
+      
+      // Update the URL parameter for the parent component to update the hash
+      setCustomUrlParam(url);
+    } catch (error) {
+      console.error("Error fetching or parsing data:", error);
+      setParsedData([]);
+      setShowError(true);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to fetch or parse data');
+    } finally {
+      setLoading(false);
+    }
+  }, [processNode, setCustomUrlParam, urlValue]);
+
+  // Load data from URL on initial render if provided
+  useEffect(() => {
+    if (initialUrl) {
+      setUrlValue(initialUrl);
+      handleFetchFromUrl(initialUrl);
+    }
+  }, [initialUrl, handleFetchFromUrl]);
+
+  const handleDisplay = useCallback(() => {
     setLoading(true);
     
     try {
@@ -225,46 +269,20 @@ const CustomTabContent = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [inputValue, processNode]);
   
-  const handleFetchFromUrl = async () => {
-    if (!urlValue) return;
-    
-    setLoading(true);
-    setShowError(false);
-    
-    try {
-      // Fetch data from the URL
-      const response = await fetch(urlValue);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch data: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      // Process the data the same way as pasted data
-      const processedData = Array.isArray(data) 
-        ? data.map(processNode) 
-        : [processNode(data)];
-      
-      setParsedData(processedData);
-    } catch (error) {
-      console.error("Error fetching or parsing data:", error);
-      setParsedData([]);
-      setShowError(true);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to fetch or parse data');
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
     setInputValue('');
     setUrlValue('');
     setParsedData([]);
     setShowError(false);
-  };
+    // Also clear the URL hash if it's present
+    if (window.location.hash) {
+      window.location.hash = '';
+    }
+    // Clear the custom URL parameter in the parent component
+    setCustomUrlParam('');
+  }, [setCustomUrlParam]);
   
   // Example input
   const exampleInput = `{
@@ -319,12 +337,14 @@ const CustomTabContent = () => {
               <input
                 type="text"
                 value={urlValue}
-                onChange={(e) => setUrlValue(e.target.value)}
+                onChange={(e) => {
+                  setUrlValue(e.target.value);
+                }}
                 className="flex-grow p-2 border border-gray-300 rounded font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="https://example.com/data.json"
               />
               <button 
-                onClick={handleFetchFromUrl}
+                onClick={() => handleFetchFromUrl()}
                 disabled={!urlValue || loading}
                 className={`px-4 py-2 rounded font-medium transition ${
                   urlValue && !loading
@@ -441,7 +461,7 @@ const CreationTabContent = () => {
       });
     }, 500);
   }, []);
-  
+
   return (
     <TreeViewContent 
       data={data} 
@@ -454,11 +474,69 @@ const CreationTabContent = () => {
 
 // Main application component
 const CheckpointTreeViewer = () => {
-  const [activeTab, setActiveTab] = useState('application');
   const [data, setData] = useState<TreeItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandAll, setExpandAll] = useState(false);
-  
+  const [activeTab, setActiveTab] = useState('application');
+  const [customUrlParam, setCustomUrlParam] = useState('');
+
+  // Parse URL hash on initial load to restore state
+  useEffect(() => {
+    // Check for hash in URL
+    const hash = window.location.hash;
+    if (hash) {
+      try {
+        // Format: #tab=custom&url=https://example.com/data.json
+        const params = new URLSearchParams(hash.substring(1));
+        const tab = params.get('tab');
+        const url = params.get('url');
+        
+        if (tab === 'custom' && url) {
+          setActiveTab('custom');
+          setCustomUrlParam(decodeURIComponent(url));
+        }
+      } catch (error) {
+        console.error('Error parsing URL hash:', error);
+      }
+    }
+  }, []);
+
+  // Update URL hash when tab changes
+  useEffect(() => {
+    if (activeTab === 'custom' && customUrlParam) {
+      // Update URL with hash
+      const params = new URLSearchParams();
+      params.set('tab', 'custom');
+      params.set('url', encodeURIComponent(customUrlParam));
+      window.location.hash = params.toString();
+    } else if (activeTab !== 'custom') {
+      // Clear hash if not on custom tab or no URL specified
+      window.location.hash = '';
+    }
+  }, [activeTab, customUrlParam]);
+
+  // Function to handle tab switching
+  const TabButton = ({ id, label, active }: { id: string; label: string; active: boolean }) => {
+    return (
+      <button
+        className={`px-4 py-2 ${
+          active 
+            ? 'border-b-2 border-blue-500 text-blue-600 font-medium' 
+            : 'text-gray-600 hover:text-blue-500'
+        }`}
+        onClick={() => handleTabChange(id)}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  // Update tab state
+  const handleTabChange = (tabId: string) => {
+    setActiveTab(tabId);
+  };
+
+  // Simulating data loading
   useEffect(() => {
     // Simulating data loading
     setTimeout(() => {
@@ -480,30 +558,14 @@ const CheckpointTreeViewer = () => {
       });
     }, 500);
   }, []);
-  
-  // Tab switching component
-  const TabButton = ({ id, label, active }: { id: string; label: string; active: boolean }) => {
-    return (
-      <button
-        onClick={() => setActiveTab(id)}
-        className={`px-4 py-2 font-medium ${
-          active 
-            ? 'border-b-2 border-blue-500 text-blue-600' 
-            : 'text-gray-500 hover:text-gray-700'
-        }`}
-      >
-        {label}
-      </button>
-    );
-  };
-  
+
   return (
     <div className="max-w-5xl mx-auto p-4">
       <div className="flex items-center space-x-3 mb-6">
         <div className="flex-shrink-0">
           <svg xmlns="http://www.w3.org/2000/svg" width="64" height="42" viewBox="0 0 256 166" fill="none">
             <mask id="a" width="256" height="166" x="0" y="0" maskUnits="userSpaceOnUse" style={{maskType: "luminance"}}>
-              <path fill="#fff" d="M122.24 141.13v-15.155c0-4.57.86-6.856 2.591-6.856h.471c1.571 0 2.359 2.286 2.359 6.856v15.155c0 4.575-.788 6.861-2.359 6.861h-.471c-1.731 0-2.591-2.286-2.591-6.861Zm.803-93.6c-6.604 0-11.987 2.21-16.15 6.618-4.168 4.418-6.247 10.408-6.247 17.972v24.354h21.689v-23.88c0-4.57.783-6.855 2.356-6.855h.472c1.729 0 2.594 2.285 2.594 6.854v31.45c-4.089-2.838-7.86-4.257-11.317-4.257h-.705c-3.301 0-5.935.594-7.897 1.777-1.967 1.183-3.46 2.834-4.481 4.962-1.024 2.129-1.731 4.696-2.12 7.686-.397 3-.589 6.387-.589 10.171v17.021c0 3.785.112 7.177.349 10.172.235 2.995.78 5.557 1.643 7.685.863 2.129 2.193 3.78 3.989 4.963 1.798 1.182 4.34 1.777 7.624 1.777h.705c3.911 0 8.134-1.5 12.672-4.494l.128 3.784h21.689V72.358c0-7.72-2.021-13.79-6.066-18.209-4.044-4.409-9.33-6.618-15.858-6.618h-4.48Zm106.083 0c-6.601 0-11.947 2.244-16.032 6.739-4.09 4.494-6.129 10.368-6.129 17.615v11.35c0 6.31 1.412 11.469 4.242 15.49 2.83 4.022 5.93 7.646 9.313 10.877 3.377 3.231 6.483 6.502 9.312 9.814 2.828 3.311 4.243 7.413 4.243 12.295v9.22c0 2.209-.198 3.906-.589 5.089-.395 1.176-1.378 1.77-2.949 1.77h-.471c-1.412 0-2.356-.594-2.828-1.77-.472-1.183-.707-2.88-.707-5.089v-21.752h-19.566v22.225c0 7.569 2.039 13.563 6.129 17.972 4.084 4.413 9.506 6.623 16.267 6.623h4.007c6.6 0 12.022-2.21 16.267-6.623 4.242-4.409 6.365-10.403 6.365-17.972V130.29c0-4.097-.67-7.72-2.004-10.876-1.338-3.151-3.029-5.949-5.068-8.395a68.558 68.558 0 0 0-6.601-6.859 100.609 100.609 0 0 1-6.601-6.503c-2.044-2.205-3.735-4.57-5.07-7.091-1.337-2.522-2.002-5.44-2.002-8.753v-9.22c0-1.891.193-3.507.59-4.846.389-1.339.978-2.008 1.765-2.008h.472c1.099 0 1.807.67 2.123 2.008.313 1.339.472 2.955.472 4.846v21.758h19.803V71.884c0-7.41-2.085-13.318-6.248-17.736-4.167-4.409-9.629-6.618-16.385-6.618h-2.12Zm-207.437 93.4V72.594c0-4.57.86-6.855 2.592-6.855h.47c1.572 0 2.36 2.285 2.36 6.855v68.336c0 4.575-.788 6.859-2.36 6.859h-.47c-1.732 0-2.592-2.284-2.592-6.859Zm.236-93.4c-6.6 0-11.907 2.21-15.914 6.619C2 58.567 0 64.557 0 72.121v69.282c0 7.57 2.002 13.564 6.01 17.973 4.007 4.413 9.314 6.623 15.915 6.623h4.478c6.53 0 11.897-2.21 16.097-6.623 4.2-4.409 6.299-10.403 6.299-17.973V72.121c0-7.565-2.1-13.554-6.3-17.972-4.199-4.409-9.565-6.619-16.096-6.619h-4.478ZM53.06 0c0 9.404-6.826 17.736-15.991 17.736v21.77h16.029v74.834l-.015 50.949.015-46.111v46.006l-.015.106h43.407v-21.776h-21.71V0h-21.72Zm122.527 141.112V72.776c0-4.57.861-6.855 2.592-6.855h.472c1.571 0 2.359 2.286 2.359 6.855v68.336c0 4.575-.788 6.86-2.359 6.86h-.472c-1.731 0-2.592-2.285-2.592-6.86ZM153.688 0v165.289h19.569l-.002-5.914c2.039 2.054 4.125 3.664 6.247 4.846 2.123 1.182 4.28 1.777 6.483 1.777h.707c6.601 0 10.921-2.21 12.966-6.623 2.043-4.409 3.066-10.403 3.066-17.972V72.12c0-3.784-.198-7.172-.59-10.166-.394-2.995-1.102-5.556-2.122-7.685a11.27 11.27 0 0 0-4.596-4.968c-2.045-1.182-4.714-1.77-8.016-1.77h-.472c-2.044 0-4.049.473-6.01 1.418-1.967.947-3.814 2.21-5.54 3.78V0h-21.69Z" />
+              <path fill="#fff" d="M122.24 141.13v-15.155c0-4.57.86-6.856 2.591-6.856h.471c1.571 0 2.359 2.286 2.359 6.856v15.155c0 4.575-.788 6.861-2.359 6.861h-.471c-1.731 0-2.591-2.286-2.591-6.861Zm.803-93.6c-6.604 0-11.987 2.21-16.15 6.618-4.168 4.418-6.247 10.408-6.247 17.972v24.354h21.689v-23.88c0-4.57.783-6.855 2.356-6.855h.472c1.729 0 2.594 2.285 2.594 6.854v31.45c-4.089-2.838-7.86-4.257-11.317-4.257h-.705c-3.301 0-5.935.594-7.897 1.777-1.967 1.183-3.46 2.834-4.481 4.962-1.024 2.129-1.731 4.696-2.12 7.686-.397 3-.589 6.387-.589 10.171v17.021c0 3.785.112 7.177.349 10.172.235 2.995.78 5.557 1.643 7.685.863 2.129 2.193 3.78 3.989 4.963 1.798 1.182 4.34 1.777 7.624 1.777h.705c3.911 0 8.134-1.5 12.672-4.494l.128 3.784h21.689V72.358c0-7.72-2.021-13.79-6.066-17.736-4.044-4.409-9.33-6.618-16.385-6.618h-2.12Zm106.083 0c-6.601 0-11.947 2.244-16.032 6.739-4.09 4.494-6.129 10.368-6.129 17.615v11.35c0 6.31 1.412 11.469 4.242 15.49 2.83 4.022 5.93 7.646 9.313 10.877 3.377 3.231 6.483 6.502 9.312 9.814 2.828 3.311 4.243 7.413 4.243 12.295v9.22c0 2.209-.198 3.906-.589 5.089-.395 1.176-1.378 1.77-2.949 1.77h-.471c-1.412 0-2.356-.594-2.828-1.77-.472-1.183-.707-2.88-.707-5.089v-21.752h-19.566v22.225c0 7.569 2.039 13.563 6.129 17.972 4.084 4.413 9.506 6.623 16.267 6.623h4.007c6.6 0 12.022-2.21 16.267-6.623 4.242-4.409 6.365-10.403 6.365-17.972V130.29c0-4.097-.67-7.72-2.004-10.876-1.338-3.151-3.029-5.949-5.068-8.395a68.558 68.558 0 0 0-6.601-6.859 100.609 100.609 0 0 1-6.601-6.503c-2.044-2.205-3.735-4.57-5.07-7.091-1.337-2.522-2.002-5.44-2.002-8.753v-9.22c0-1.891.193-3.507.59-4.846.389-1.339.978-2.008 1.765-2.008h.472c1.099 0 1.807.67 2.123 2.008.313 1.339.472 2.955.472 4.846v21.758h19.803V71.884c0-7.41-2.085-13.318-6.248-17.736-4.167-4.409-9.629-6.618-16.385-6.618h-2.12Zm-207.437 93.4V72.594c0-4.57.86-6.855 2.592-6.855h.47c1.572 0 2.36 2.285 2.36 6.855v68.336c0 4.575-.788 6.859-2.36 6.859h-.47c-1.732 0-2.592-2.284-2.592-6.859Zm.236-93.4c-6.6 0-11.907 2.244-15.914 6.619C2 58.567 0 64.557 0 72.121v69.282c0 7.57 2.002 13.564 6.01 17.973 4.007 4.413 9.314 6.623 15.915 6.623h4.478c6.53 0 11.897-2.21 16.097-6.623 4.2-4.409 6.299-10.403 6.299-17.973V72.121c0-7.565-2.1-13.554-6.3-17.972-4.199-4.409-9.565-6.619-16.096-6.619h-4.478ZM53.06 0c0 9.404-6.826 17.736-15.991 17.736v21.79h16.042v74.894l-.015 50.99.015-46.149v46.045l-.015.105H96.51v-21.794H74.78V0H53.043Zm122.527 141.112V72.776c0-4.57.861-6.855 2.592-6.855h.472c1.571 0 2.359 2.286 2.359 6.855v68.336c0 4.575-.788 6.86-2.359 6.86h-.472c-1.731 0-2.592-2.285-2.592-6.86ZM153.688 0v165.289h19.569l-.002-5.914c2.039 2.054 4.125 3.664 6.247 4.846 2.123 1.182 4.28 1.777 6.483 1.777h.707c6.601 0 10.921-2.21 12.966-6.623 2.043-4.409 3.066-10.403 3.066-17.972V72.12c0-3.784-.198-7.172-.59-10.166-.394-2.995-1.102-5.556-2.122-7.685a11.27 11.27 0 0 0-4.596-4.968c-2.045-1.182-4.714-1.77-8.016-1.77h-.472c-2.044 0-4.049.473-6.01 1.418-1.967.947-3.814 2.21-5.54 3.78V0h-21.69Z" />
             </mask>
             <g mask="url(#a)">
               <path fill="url(#b)" d="m19.242-67.684-62.865 221.211 280.39 80.166 62.865-221.21-280.39-80.167Z" />
@@ -569,7 +631,7 @@ const CheckpointTreeViewer = () => {
         ) : activeTab === 'creation' ? (
           <CreationTabContent />
         ) : (
-          <CustomTabContent />
+          <CustomTabContent initialUrl={customUrlParam} setCustomUrlParam={setCustomUrlParam} />
         )}
       </div>
     </div>
