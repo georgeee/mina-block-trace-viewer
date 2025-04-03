@@ -176,73 +176,35 @@ const TreeViewContent = ({ data, isLoading, expandAll, setExpandAll }: TreeViewC
 // Custom tab content component
 const CustomTabContent = () => {
   const [inputValue, setInputValue] = useState('');
+  const [urlValue, setUrlValue] = useState('');
   const [parsedData, setParsedData] = useState<TreeItem[]>([]);
   const [expandAll, setExpandAll] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Example input
-  const exampleInput = `{
-  "name": "block_creation",
-  "duration": "33.17s",
-  "children": [
-    {
-      "name": "init_block",
-      "duration": "52.04μs"
-    },
-    {
-      "name": "collect_transactions",
-      "duration": "25.18s",
-      "children": [
-        {
-          "name": "sort_and_filter",
-          "duration": "431.98ms"
-        },
-        {
-          "name": "dedup_txns",
-          "duration": "15.03s"
-        }
-      ]
-    },
-    {
-      "name": "validation",
-      "duration": "8.12s",
-      "children": [
-        {
-          "name": "check_signatures",
-          "duration": "7.83s"
-        },
-        {
-          "name": "verify_balances",
-          "duration": "245.67ms"
-        }
-      ]
+  // Pre-process the data to ensure it has the right structure
+  const processNode = (node: any): TreeItem => {
+    // Convert numbers to duration strings for display
+    if (typeof node.duration === 'number') {
+      node.duration = `${node.duration.toFixed(2)}ms`;
     }
-  ]
-}`;
+    
+    // Ensure name exists
+    if (!node.name) {
+      node.name = 'Unnamed Node';
+    }
+    
+    // Process children recursively
+    if (node.children && Array.isArray(node.children)) {
+      node.children = node.children.map(processNode);
+    }
+    
+    return node;
+  };
 
   const handleDisplay = () => {
     setLoading(true);
-    
-    // Pre-process the data to ensure it has the right structure
-    const processNode = (node: any): TreeItem => {
-      // Convert numbers to duration strings for display
-      if (typeof node.duration === 'number') {
-        node.duration = `${node.duration.toFixed(2)}ms`;
-      }
-      
-      // Ensure name exists
-      if (!node.name) {
-        node.name = 'Unnamed Node';
-      }
-      
-      // Process children recursively
-      if (node.children && Array.isArray(node.children)) {
-        node.children = node.children.map(processNode);
-      }
-      
-      return node;
-    };
     
     try {
       // Parse the input
@@ -259,6 +221,39 @@ const CustomTabContent = () => {
       console.error("Error parsing JSON:", error);
       setParsedData([]);
       setShowError(true);
+      setErrorMessage('Error parsing JSON data. Please check your input and try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleFetchFromUrl = async () => {
+    if (!urlValue) return;
+    
+    setLoading(true);
+    setShowError(false);
+    
+    try {
+      // Fetch data from the URL
+      const response = await fetch(urlValue);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch data: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      // Process the data the same way as pasted data
+      const processedData = Array.isArray(data) 
+        ? data.map(processNode) 
+        : [processNode(data)];
+      
+      setParsedData(processedData);
+    } catch (error) {
+      console.error("Error fetching or parsing data:", error);
+      setParsedData([]);
+      setShowError(true);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to fetch or parse data');
     } finally {
       setLoading(false);
     }
@@ -266,57 +261,140 @@ const CustomTabContent = () => {
   
   const handleReset = () => {
     setInputValue('');
+    setUrlValue('');
     setParsedData([]);
     setShowError(false);
   };
   
+  // Example input
+  const exampleInput = `{
+  "title": "block_creation",
+  "duration": "33.17s",
+  "children": [
+    {
+      "title": "init_block",
+      "duration": "52.04μs"
+    },
+    {
+      "title": "collect_transactions",
+      "duration": "25.18s",
+      "children": [
+        {
+          "title": "sort_and_filter",
+          "duration": "431.98ms"
+        },
+        {
+          "title": "dedup_txns",
+          "duration": "15.03s"
+        }
+      ]
+    },
+    {
+      "title": "validation",
+      "duration": "8.12s",
+      "children": [
+        {
+          "title": "check_signatures",
+          "duration": "7.83s"
+        },
+        {
+          "title": "verify_balances",
+          "duration": "245.67ms"
+        }
+      ]
+    }
+  ]
+}`;
+
   return (
     <div>
       <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Paste your checkpoint tree JSON data:
-        </label>
-        <div className="flex space-x-2 mb-2">
-          <button 
-            onClick={() => setInputValue(exampleInput)}
-            className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-800 text-xs font-medium transition"
-          >
-            Load Example
-          </button>
-          {inputValue && (
-            <button 
-              onClick={handleReset}
-              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-800 text-xs font-medium transition"
-            >
-              Clear
-            </button>
-          )}
+        <div className="flex flex-col space-y-4">
+          {/* URL Input Section */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Fetch checkpoint tree JSON from URL:
+            </label>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                value={urlValue}
+                onChange={(e) => setUrlValue(e.target.value)}
+                className="flex-grow p-2 border border-gray-300 rounded font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="https://example.com/data.json"
+              />
+              <button 
+                onClick={handleFetchFromUrl}
+                disabled={!urlValue || loading}
+                className={`px-4 py-2 rounded font-medium transition ${
+                  urlValue && !loading
+                    ? 'bg-blue-500 hover:bg-blue-600 text-white' 
+                    : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                {loading ? 'Fetching...' : 'Fetch'}
+              </button>
+            </div>
+          </div>
+          
+          {/* Or Divider */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300"></div>
+            </div>
+            <div className="relative flex justify-center">
+              <span className="px-2 bg-white text-sm text-gray-500">OR</span>
+            </div>
+          </div>
+          
+          {/* Paste Input Section */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Paste your checkpoint tree JSON data:
+            </label>
+            <div className="flex space-x-2 mb-2">
+              <button 
+                onClick={() => setInputValue(exampleInput)}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-800 text-xs font-medium transition"
+              >
+                Load Example
+              </button>
+              {inputValue && (
+                <button 
+                  onClick={handleReset}
+                  className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-800 text-xs font-medium transition"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <textarea
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              className="w-full h-40 p-2 border border-gray-300 rounded font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Paste JSON data here..."
+            />
+          </div>
         </div>
-        <textarea
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          className="w-full h-40 p-2 border border-gray-300 rounded font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          placeholder="Paste JSON data here..."
-        />
       </div>
       
       <div className="mb-4">
         <button 
           onClick={handleDisplay}
-          disabled={!inputValue}
+          disabled={!inputValue || loading}
           className={`px-4 py-2 rounded font-medium transition ${
-            inputValue 
+            inputValue && !loading
               ? 'bg-blue-500 hover:bg-blue-600 text-white' 
               : 'bg-gray-200 text-gray-500 cursor-not-allowed'
           }`}
         >
-          Display Tree
+          {loading ? 'Processing...' : 'Display Tree'}
         </button>
       </div>
       
       {showError && (
         <div className="mb-4 p-2 bg-red-100 border border-red-300 rounded text-red-800">
-          Error parsing JSON data. Please check your input and try again.
+          {errorMessage || 'Error parsing JSON data. Please check your input and try again.'}
         </div>
       )}
       
